@@ -7,13 +7,17 @@ package packet
 import (
 	"bytes"
 	"crypto"
+	"crypto/dsa"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/hex"
 	"hash"
+	"io"
+	"math/big"
 	"testing"
 	"time"
 )
@@ -174,6 +178,63 @@ func TestRSASignerPrivateKey(t *testing.T) {
 
 	sig := &Signature{
 		PubKeyAlgo: PubKeyAlgoRSA,
+		Hash:       crypto.SHA256,
+	}
+	msg := []byte("Hello World!")
+
+	h, err := populateHash(sig.Hash, msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sig.Sign(h, priv, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if h, err = populateHash(sig.Hash, msg); err != nil {
+		t.Fatal(err)
+	}
+	if err := priv.VerifySignature(h, sig); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type dsaSigner struct {
+	priv *dsa.PrivateKey
+}
+
+func (s *dsaSigner) Public() crypto.PublicKey {
+	return &s.priv.PublicKey
+}
+
+type dsaSignature struct {
+	R, S *big.Int
+}
+
+func (s *dsaSigner) Sign(rand io.Reader, msg []byte, opts crypto.SignerOpts) ([]byte, error) {
+	R, S, err := dsa.Sign(rand, s.priv, msg)
+	if err != nil {
+		return nil, err
+	}
+	return asn1.Marshal(dsaSignature{R, S})
+}
+
+func TestDSASignerPrivateKey(t *testing.T) {
+	dsaPriv := new(dsa.PrivateKey)
+	if err := dsa.GenerateParameters(&dsaPriv.Parameters, rand.Reader, dsa.L1024N160); err != nil {
+		t.Fatal(err)
+	}
+	if err := dsa.GenerateKey(dsaPriv, rand.Reader); err != nil {
+		t.Fatal(err)
+	}
+
+	priv := NewSignerPrivateKey(time.Now(), &dsaSigner{dsaPriv})
+
+	if priv.PubKeyAlgo != PubKeyAlgoDSA {
+		t.Fatal("NewSignerPrivateKey should have made an DSA private key")
+	}
+
+	sig := &Signature{
+		PubKeyAlgo: PubKeyAlgoDSA,
 		Hash:       crypto.SHA256,
 	}
 	msg := []byte("Hello World!")
